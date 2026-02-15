@@ -1,0 +1,46 @@
+name: App to R2 Direct Compressor
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Direct Link to Video'
+        required: true
+      file_name:
+        description: 'Original File Name'
+        required: true
+
+jobs:
+  compress:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg rclone
+
+      - name: Download Original Video
+        run: |
+          # Download video from Drive or other link
+          curl -L "${{ github.event.inputs.video_url }}" -o original_video.mp4
+
+      - name: Compress Video
+        run: |
+          # Compressing to DOT CRF 28
+          ffmpeg -i original_video.mp4 -vcodec libx264 -crf 36 -preset faster -acodec aac output.mp4
+
+      - name: Configure R2 & Upload
+        run: |
+          mkdir -p ~/.config/rclone
+          cat <<EOF > ~/.config/rclone/rclone.conf
+          [r2]
+          type = s3
+          provider = Cloudflare
+          access_key_id = ${{ secrets.R2_ACCESS_KEY }}
+          secret_access_key = ${{ secrets.R2_SECRET_KEY }}
+          endpoint = ${{ secrets.R2_ENDPOINT }}
+          EOF
+          
+          # Upload the video to your bucket 'vyb-storage' and name it correctly
+          rclone copyto output.mp4 r2:vyb-storage/compressed_${{ github.event.inputs.file_name }}
+          
+      - name: Cleanup
+        if: always()
+        run: rm -f original_video.mp4 output.mp4

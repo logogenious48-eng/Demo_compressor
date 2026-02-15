@@ -1,46 +1,51 @@
-name: App to R2 Direct Compressor
+name: Video Compression Engine
+
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'Direct Link to Video'
+        description: 'Input Video URL'
         required: true
       file_name:
-        description: 'Original File Name'
+        description: 'Output File Name'
         required: true
 
 jobs:
-  compress:
+  compress_and_sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Tools
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg rclone
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-      - name: Download Original Video
-        run: |
-          # Download video from Drive or other link
-          curl -L "${{ github.event.inputs.video_url }}" -o original_video.mp4
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Compress Video
+      - name: Download and Compress Video
         run: |
-          # Compressing to DOT CRF 28
-          ffmpeg -i original_video.mp4 -vcodec libx264 -crf 36 -preset faster -acodec aac output.mp4
+          wget -O input_video.mp4 "${{ github.event.inputs.video_url }}"
+          # ভিডিওর মান বজায় রেখে সাইজ কমানো হচ্ছে
+          ffmpeg -i input_video.mp4 -vcodec libx264 -crf 28 "${{ github.event.inputs.file_name }}"
 
-      - name: Configure R2 & Upload
+      - name: Upload to Cloudflare R2
+        uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+        env:
+          AWS_S3_BUCKET: vyb-storage
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_KEY }}
+          AWS_REGION: 'auto'
+          SOURCE_DIR: '.'
+          DEST_DIR: 'videos'
+
+      - name: Notify Supabase (Feed Update)
         run: |
-          mkdir -p ~/.config/rclone
-          cat <<EOF > ~/.config/rclone/rclone.conf
-          [r2]
-          type = s3
-          provider = Cloudflare
-          access_key_id = ${{ secrets.R2_ACCESS_KEY }}
-          secret_access_key = ${{ secrets.R2_SECRET_KEY }}
-          endpoint = ${{ secrets.R2_ENDPOINT }}
-          EOF
-          
-          # Upload the video to your bucket 'vyb-storage' and name it correctly
-          rclone copyto output.mp4 r2:vyb-storage/compressed_${{ github.event.inputs.file_name }}
-          
-      - name: Cleanup
-        if: always()
-        run: rm -f original_video.mp4 output.mp4
+          curl -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/video_feed" \
+          -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+          -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "video_name": "${{ github.event.inputs.file_name }}",
+            "url": "https://pub-2d597d5c97eb4cf4a33197d928ca93b3.r2.dev/videos/${{ github.event.inputs.file_name }}",
+            "status": "ready"
+          }'

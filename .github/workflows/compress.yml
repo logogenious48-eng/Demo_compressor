@@ -1,35 +1,38 @@
-name: Video Compression Engine
+name: Video Compression & Sync
 
 on:
   workflow_dispatch:
     inputs:
-      video_url:
-        description: 'Input Video URL'
-        required: true
       file_name:
-        description: 'Output File Name'
+        description: 'Name of the video file (e.g. video.mp4)'
+        required: true
+      video_url:
+        description: 'Direct download link of the video'
         required: true
 
 jobs:
-  compress_and_sync:
+  compress_and_upload:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Download and Compress Video
+      - name: Download Video
+        run: curl -L "${{ github.event.inputs.video_url }}" -o input_video.mp4
+
+      - name: Compress Video (720p)
         run: |
-          wget -O input_video.mp4 "${{ github.event.inputs.video_url }}"
-          # ভিডিওর মান বজায় রেখে সাইজ কমানো হচ্ছে
-          ffmpeg -i input_video.mp4 -vcodec libx264 -crf 28 "${{ github.event.inputs.file_name }}"
+          ffmpeg -i input_video.mp4 -vcodec libx264 -crf 28 -preset faster -vf "scale=-2:720" output_video.mp4
 
       - name: Upload to Cloudflare R2
         uses: jakejarvis/s3-sync-action@master
         with:
-          args: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+          # এখানে --include "*.mp4" দিয়ে শুধু ভিডিও ফিল্টার করা হয়েছে এবং বাকি সব বাদ দেওয়া হয়েছে
+          args: --endpoint-url ${{ secrets.R2_ENDPOINT }} --include "output_video.mp4" --exclude "*"
         env:
           AWS_S3_BUCKET: vyb-storage
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
@@ -38,14 +41,16 @@ jobs:
           SOURCE_DIR: '.'
           DEST_DIR: 'videos'
 
-      - name: Notify Supabase (Feed Update)
+      - name: Notify Supabase (Update Posts Table)
         run: |
-          curl -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/video_feed" \
+          # ভিডিওর ফাইনাল ইউআরএল তৈরি
+          VIDEO_URL="https://pub-2d597d5c97eb4cf4a33197d928ca93b3.r2.dev/videos/output_video.mp4"
+          
+          curl -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/posts" \
           -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
           -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
           -H "Content-Type: application/json" \
-          -d '{
-            "video_name": "${{ github.event.inputs.file_name }}",
-            "url": "https://pub-2d597d5c97eb4cf4a33197d928ca93b3.r2.dev/videos/${{ github.event.inputs.file_name }}",
-            "status": "ready"
-          }'
+          -d "{
+            \"content\": [{\"url\": \"$VIDEO_URL\"}],
+            \"status\": \"active\"
+          }"

@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       file_name:
-        description: 'Name of the video file (e.g. video.mp4)'
+        description: 'Name of the video file'
         required: true
       video_url:
-        description: 'Direct download link of the video'
+        description: 'Direct download link'
         required: true
 
 jobs:
@@ -24,33 +24,23 @@ jobs:
       - name: Download Video
         run: curl -L "${{ github.event.inputs.video_url }}" -o input_video.mp4
 
-      - name: Compress Video (720p)
-        run: |
-          ffmpeg -i input_video.mp4 -vcodec libx264 -crf 28 -preset faster -vf "scale=-2:720" output_video.mp4
+      - name: Compress Video
+        run: ffmpeg -i input_video.mp4 -vcodec libx264 -crf 28 -preset faster -vf "scale=-2:720" output_video.mp4
 
       - name: Upload to Cloudflare R2
-        uses: jakejarvis/s3-sync-action@master
-        with:
-          # এখানে --include "*.mp4" দিয়ে শুধু ভিডিও ফিল্টার করা হয়েছে এবং বাকি সব বাদ দেওয়া হয়েছে
-          args: --endpoint-url ${{ secrets.R2_ENDPOINT }} --include "output_video.mp4" --exclude "*"
         env:
-          AWS_S3_BUCKET: vyb-storage
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_KEY }}
-          AWS_REGION: 'auto'
-          SOURCE_DIR: '.'
-          DEST_DIR: 'videos'
-
-      - name: Notify Supabase (Update Posts Table)
         run: |
-          # ভিডিওর ফাইনাল ইউআরএল তৈরি
+          aws s3 cp output_video.mp4 s3://vyb-storage/videos/output_video.mp4 \
+          --endpoint-url ${{ secrets.R2_ENDPOINT }} \
+          --region auto
+
+      - name: Notify Supabase
+        run: |
           VIDEO_URL="https://pub-2d597d5c97eb4cf4a33197d928ca93b3.r2.dev/videos/output_video.mp4"
-          
           curl -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/posts" \
           -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
           -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
           -H "Content-Type: application/json" \
-          -d "{
-            \"content\": [{\"url\": \"$VIDEO_URL\"}],
-            \"status\": \"active\"
-          }"
+          -d "{\"content\": [{\"url\": \"$VIDEO_URL\"}], \"status\": \"active\"}"

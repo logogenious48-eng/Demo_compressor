@@ -1,14 +1,9 @@
 name: Video Compression & Sync
 
 on:
-  workflow_dispatch:
-    inputs:
-      file_name:
-        description: 'Name of the video file'
-        required: true
-      video_url:
-        description: 'Direct download link'
-        required: true
+  # এটি আপনার অ্যাপের 'repository_dispatch' রিকোয়েস্ট গ্রহণ করবে
+  repository_dispatch:
+    types: [compress_video]
 
 jobs:
   compress_and_upload:
@@ -22,25 +17,35 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Download Video
-        run: curl -L "${{ github.event.inputs.video_url }}" -o input_video.mp4
+        run: |
+          # অ্যাপ থেকে পাঠানো video_url ব্যবহার করা হচ্ছে
+          curl -L "${{ github.event.client_payload.video_url }}" -o input_video.mp4
 
-      - name: Compress Video
-        run: ffmpeg -i input_video.mp4 -vcodec libx264 -crf 28 -preset faster -vf "scale=-2:720" output_video.mp4
+      - name: Compress Video (720p)
+        run: |
+          ffmpeg -i input_video.mp4 -vcodec libx264 -crf 28 -preset faster -vf "scale=-2:720" output_video.mp4
 
       - name: Upload to Cloudflare R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_KEY }}
         run: |
-          aws s3 cp output_video.mp4 s3://vyb-storage/videos/output_video.mp4 \
+          # অ্যাপ থেকে পাঠানো ইউনিক ফাইল নামে সেভ হবে
+          aws s3 cp output_video.mp4 s3://vyb-storage/videos/${{ github.event.client_payload.file_name }} \
           --endpoint-url ${{ secrets.R2_ENDPOINT }} \
           --region auto
 
-      - name: Notify Supabase
+      - name: Notify Supabase (Update Status to Active)
         run: |
-          VIDEO_URL="https://pub-2d597d5c97eb4cf4a33197d928ca93b3.r2.dev/videos/output_video.mp4"
-          curl -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/posts" \
+          # ভিডিওর ফাইনাল পাবলিক ইউআরএল
+          VIDEO_URL="https://pub-2d597d5c97eb4cf4a33197d928ca93b3.r2.dev/videos/${{ github.event.client_payload.file_name }}"
+          
+          # PATCH রিকোয়েস্টের মাধ্যমে সুপাবেসে 'processing' কে 'active' করা হচ্ছে
+          curl -X PATCH "${{ secrets.SUPABASE_URL }}/rest/v1/posts?id=eq.${{ github.event.client_payload.post_id }}" \
           -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
           -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
           -H "Content-Type: application/json" \
-          -d "{\"content\": [{\"url\": \"$VIDEO_URL\"}], \"status\": \"active\"}"
+          -d "{
+            \"content\": [{\"url\": \"$VIDEO_URL\"}],
+            \"status\": \"active\"
+          }"
